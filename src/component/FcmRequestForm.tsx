@@ -1,301 +1,285 @@
 'use client'
 
-import React, { useEffect, useState } from 'react'
-import { FieldValues, useForm } from 'react-hook-form'
-import { get, getDatabase, ref } from 'firebase/database'
-import 'firebase/compat/storage'
-import GlobalStyle from '@/style/GlobalStyle'
-import FirebaseUtil from '@/util/FirebaseUtil'
-import LogUtil from '@/util/LogUtil'
-import FcmRequestType from '@/util/FcmRequestType'
-import SendFcmUseCase from '@/domain/SendFcmUseCase'
-import FormatUtil from '@/util/FormatUtil'
-import Paper from '@mui/material/Paper'
-import Button from '@mui/material/Button'
-import SendIcon from '@mui/icons-material/Send'
+import * as React from 'react'
 import Grid from '@mui/material/Grid'
+import Paper from '@mui/material/Paper'
+import TextField from '@mui/material/TextField'
+import Button from '@mui/material/Button'
+import Typography from '@mui/material/Typography'
+import Table from '@mui/material/Table'
+import TableHead from '@mui/material/TableHead'
+import TableRow from '@mui/material/TableRow'
+import TableCell from '@mui/material/TableCell'
+import TableBody from '@mui/material/TableBody'
+import Link from '@mui/material/Link'
+import Checkbox from '@mui/material/Checkbox'
+import FormControl from '@mui/material/FormControl'
+import FormControlLabel from '@mui/material/FormControlLabel'
+import FormGroup from '@mui/material/FormGroup'
+import InputLabel from '@mui/material/InputLabel'
+import MenuItem from '@mui/material/MenuItem'
+import Select, { SelectChangeEvent } from '@mui/material/Select'
+import RefreshIcon from '@mui/icons-material/Refresh'
+import FormatUtil from '@/util/FormatUtil'
+import { Request, requestFcm, requestType } from '@/hooks/fcm'
+import { createFileData, FileData } from '@/hooks/data'
+import { getFirebaseToken, getStorageFileUrls, initFirebaseApp } from '@/hooks/firebase'
+import { showErrorSnackbar, showSuccessSnackbar } from '@/hooks/snackbar'
+import { useSnackbar } from 'notistack'
+import firebase from 'firebase/compat/app'
+import 'firebase/compat/storage'
+import Box from '@mui/material/Box'
+import IconButton from '@mui/material/IconButton'
+import { FcmRequestFormProps, RequestValues } from '@/types'
 
-export default function FcmRequestForm({ authorizationKey, firebaseConfig }: Props) {
+const FcmRequestForm = (
+    { authorizationKey, firebaseConfig }: FcmRequestFormProps
+) => {
 
-    const TAG: string = 'FcmRequestForm'
+    const LOCAL_STORAGE_VALUES_KEY = `irfcm:values:${firebaseConfig?.projectId}`
+    const LOCAL_STORAGE_FILE_DATA_KEY = `irfcm:filedata:${firebaseConfig?.projectId}`
 
-    const firebaseUtil = new FirebaseUtil()
-    const sendFcmUseCase = new SendFcmUseCase()
+    const { UPLOAD_LOGS, UPLOAD_FILE_LIST, UPLOAD_RECORDS } = requestType()
 
-
-    /**
-     * 녹취 포함 여부.
-     */
-    const isIncludeRecord = {
-        TRUE: 'true',
-        FALSE: 'false'
+    const saveValuesToLocalStorage = (values: RequestValues) => {
+        localStorage.setItem(LOCAL_STORAGE_VALUES_KEY, JSON.stringify(values))
     }
 
-    /**
-     * 요청 타입.
-     */
-    interface Request {
-        phoneNumber: string,
-        date: string,
-        requestType: number,
-        isIncludeRecord: boolean,
-        // priority: string,
+    const getValuesFromLocalStorage = () => {
+        const storedValues = localStorage.getItem(LOCAL_STORAGE_VALUES_KEY)
+        return storedValues ? JSON.parse(storedValues) : null
     }
 
-    /**
-     * 사용자 입력값.
-     */
-    const [value, setValue] = useState<Request>({
-        phoneNumber: '',
-        date: '',
-        requestType: FcmRequestType.UPLOAD_LOGS,
-        isIncludeRecord: false,
-        // priority: 'high'
+    const [values, setValues] = React.useState<RequestValues>(() => {
+        const savedValues = getValuesFromLocalStorage()
+        return savedValues ? savedValues : {
+            phoneNumber: '',
+            date: '',
+            type: UPLOAD_LOGS,
+            isIncludeRecord: false
+        }
     })
 
-    /**
-     * 파이어베이스 스토리지 버킷.
-     */
-    const [bucket, setBucket] = useState<any>()
+    const {
+        phoneNumber,
+        date,
+        type,
+        isIncludeRecord
+    } = values
 
-    /**
-     * 스토리지 파일 다운로드 링크.
-     */
-    const [urls, setUrls] = useState<Array<string>>([])
+    const saveFileDataToLocalStorage = (fileData: Array<FileData>) => {
+        localStorage.setItem(LOCAL_STORAGE_FILE_DATA_KEY, JSON.stringify(fileData))
+    }
 
-    /**
-     * 사용자 알림 메시지.
-     */
-    const [message, setMessage] = useState<string>('')
+    const getFileDataFromLocalStorage = () => {
+        const storedFileData = localStorage.getItem(LOCAL_STORAGE_FILE_DATA_KEY)
+        return storedFileData ? JSON.parse(storedFileData) : null
+    }
 
-    /**
-     * 진행상태 표시 여부.
-     */
-    const [progress, setProgress] = useState<boolean>(false)
+    const [storageRef, setStorageRef] = React.useState<firebase.storage.Reference>()
+    const [storageFileData, setStorageFileData] = React.useState<Array<FileData>>(() => {
+        const savedFileData = getFileDataFromLocalStorage()
+        return savedFileData ? savedFileData : []
+    })
 
+    const init = async () => {
+        const firebase = await initFirebaseApp(firebaseConfig)
+        const storage = firebase.storage()      // import 'firebase/compat/storage'
+        return storage.ref()
+    }
 
-    useEffect(() => {
-        const app = firebaseUtil.initFirebaseApp(firebaseConfig)
-        const bucketName = firebaseConfig?.storageBucket
-        setBucket(() => app.storage().refFromURL(`gs://${bucketName}`))
+    React.useEffect(() => {
+        init().then(ref => setStorageRef(ref))
     }, [])
 
-    /**
-     * React Hook Form.
-     */
-    const { register, handleSubmit, watch } = useForm()
+    React.useEffect(() => {
+        saveValuesToLocalStorage(values)
+    }, [values])
 
-    /**
-     * 양식이 유효하면 실행.
-     */
-    function onValid(data: FieldValues, event: React.BaseSyntheticEvent | undefined) {
-        event?.preventDefault()
-        showProgressFiveSeconds()
+    React.useEffect(() => {
+        saveFileDataToLocalStorage(storageFileData)
+    }, [storageFileData])
 
-        const {
-            phoneNumber,                // 법인폰 번호.
-            date,                       // 날짜.
-            requestType,                // 요청 타입.
-            isIncludeRecord,            // 녹취 포함 여부.
-            // priority                    // 중요도.
-        } = data                       // 사용자 입력 데이터.
+    const { enqueueSnackbar } = useSnackbar()
 
-        getFirebaseToken(phoneNumber)
-            .then((token) => {
-                LogUtil.d(TAG, `getFirebaseToken. token: ${token}`)
+    const handleChange = (
+        event: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement> | SelectChangeEvent<number>
+    ) => {
+        const { value, name } = event.target
 
-                const request = {
-                    authorizationKey: authorizationKey,
-                    token: token,
-                    date: date,
-                    requestType: requestType,
-                    isIncludeRecord: isIncludeRecord,
-                    priority: 'high'
-                }
-                sendFcmUseCase.request(request, (response) => {
-                    response.task({
-                        onSuccess: () => {
-                            LogUtil.d(TAG, response.message!)
-                            setMessage(() => response.message!)
-                            setTimeout(() => {
-                                firebaseUtil.getLogDownloadLinks(phoneNumber, date, bucket)
-                                    .then(urls => setUrls(urls))
-                            }, 3000)   // 로그가 올라올 때까지 대기.
-                        },
-                        onFail: () => {
-                            LogUtil.d(TAG, response.message!)
-                            setMessage(() => response.message!)
-                        }
-                    })
+        if ('checked' in event.target && name === 'isIncludeRecord') {
+            // console.log(`[${name}] ${event.target.checked}`)
+            setValues({
+                ...values,
+                [name]: event.target.checked
+            })
+        } else {
+            // console.log(`[${name}] ${value}`)
+            setValues({
+                ...values,
+                [name]: value,
+            })
+        }
+    }
+
+    const getStorageFiles = async () => {
+        const urls = await getStorageFileUrls(values.phoneNumber, values.date, storageRef!)
+        const formatUtil = new FormatUtil()
+
+        setStorageFileData([])
+        for (const url of urls) {
+            const fileName = formatUtil.extractFileNameFromUrl(url)
+            const fileData = createFileData(fileName, '', '', url)
+            setStorageFileData(prevState => [...prevState, fileData])
+        }
+    }
+
+    const handleSubmit = async () => {
+        const token = await getFirebaseToken(values.phoneNumber)
+        const request: Request = {
+            authorizationKey: authorizationKey,
+            token: token,
+            date: values.date,
+            type: values.type.toString(),
+            isIncludeRecord: values.isIncludeRecord,
+            priority: 'high'
+        }
+        const response = await requestFcm(request)
+        console.log(response)
+
+        if (response.success === 1) {
+            showSuccessSnackbar(enqueueSnackbar, 'FCM 전송 성공')
+            setTimeout(() => {
+                getStorageFiles().then(() => {
+                    /* empty */
                 })
-            })
-            .catch((error) => {
-                LogUtil.exception(TAG, error)
-            })
+            }, 3000)
+        }
+        if (response.failure === 1) {
+            showErrorSnackbar(enqueueSnackbar, 'FCM 전송 실패')
+        }
     }
-
-    /**
-     * 양식이 유효하지 않으면 실행.
-     */
-    function onInvalid(data: FieldValues, event: React.BaseSyntheticEvent | undefined) {
-        LogUtil.d(TAG, `onInvalid. data: ${data}, event: ${event}`)
-    }
-
-    /**
-     * 법인폰 번호로 파이어베이스 토큰 조회.
-     * @param phoneNumber 법인폰 번호.
-     */
-    async function getFirebaseToken(phoneNumber: string) {
-        const database = getDatabase()
-        const snapshot = await get(ref(database, `users/${phoneNumber.replace(/-/g, '')}`))
-        return snapshot.val()
-    }
-
-    /**
-     * 저장소 조회 버튼 클릭 시.
-     */
-    function handleStorageSearchClick() {
-        LogUtil.d(TAG, 'handleStorageSearchClick.')
-        const app = firebaseUtil.initFirebaseApp(firebaseConfig)
-        // const bucketName = firebaseConfig?.storageBucket;
-        // setBucket(() => app.storage().refFromURL(`gs://${bucketName}`));
-
-        firebaseUtil.getLogDownloadLinks(value.phoneNumber, value.date, bucket)
-            .then(urls => setUrls(urls))
-    }
-
-    /**
-     * ProgressSpinner 표시.
-     */
-    function showProgressFiveSeconds() {
-        setProgress(true)
-        setTimeout(() => {
-            setProgress(false)
-        }, 5000)
-    }
-
-    return <Grid container spacing={3}>
-        <Grid item xs={12} lg={6}>
-            <Paper sx={{ p: 2, display: 'flex', flexDirection: 'column' }}>
-                <form onSubmit={handleSubmit(onValid, onInvalid)}>
-                    <div className="grid gap-6 mb-6">
-                        <div>
-                            <label htmlFor="phone_number"
-                                   className={GlobalStyle.LABEL}>법인폰 번호</label>
-                            <input type="tel" id="phone_number"
-                                   className={GlobalStyle.INPUT}
-                                   placeholder="법인폰 번호를 입력하세요"
-                                   {...register('phoneNumber')}
-                                   defaultValue={value.phoneNumber}
-                                   onChange={event => setValue(prevState => ({
-                                       ...prevState,
-                                       phoneNumber: event.target.value,
-                                   }))}
-                                   pattern="[0-9]{3}-[0-9]{4}-[0-9]{4}|[0-9]{11}"
-                                   required />
-                        </div>
-                        <div>
-                            <label htmlFor="date"
-                                   className={GlobalStyle.LABEL}>날짜</label>
-                            <input type="text" id="date"
-                                   className={GlobalStyle.INPUT}
-                                   placeholder="YYYY-MM-DD 형태로 날짜를 입력하세요"
-                                   {...register('date')}
-                                   defaultValue={value.date}
-                                   onChange={event => setValue(prevState => ({
-                                       ...prevState,
-                                       date: event.target.value,
-                                   }))}
-                                   pattern="[0-9]{4}-[0-9]{2}-[0-9]{2}"
-                                   required />
-                        </div>
-                        <div>
-                            <label htmlFor="requestType"
-                                   className={GlobalStyle.LABEL}>요청 타입</label>
-                            <select id="requestType"
-                                    className={GlobalStyle.INPUT}
-                                    {...register('requestType')}
-                                    defaultValue={value.requestType}
-                                    onChange={event => setValue(prevState => ({
-                                        ...prevState,
-                                        requestType: Number(event.target.value),
-                                    }))}>
-                                <option value={FcmRequestType.UPLOAD_LOGS}>[1] 로그</option>
-                                <option value={FcmRequestType.UPLOAD_FILE_LIST}>[2] 파일 리스트</option>
-                            </select>
-                        </div>
-                        <div>
-                            <label htmlFor="is_include_record"
-                                   className={GlobalStyle.LABEL}>녹취 포함 여부</label>
-                            <select id="is_include_record"
-                                    className={GlobalStyle.INPUT}
-                                    {...register('isIncludeRecord')}
-                                    defaultValue={value.isIncludeRecord ? isIncludeRecord.TRUE : isIncludeRecord.FALSE}
-                                    onChange={event => setValue(prevState => ({
-                                        ...prevState,
-                                        isIncludeRecord: event.target.value == isIncludeRecord.TRUE,
-                                    }))}>
-                                <option value={isIncludeRecord.FALSE}>false</option>
-                                <option value={isIncludeRecord.TRUE}>true</option>
-                            </select>
-                        </div>
-                    </div>
-
-                    <Button type="submit" variant="outlined" color="primary" endIcon={<SendIcon />}>
-                        Send
-                    </Button>
-                </form>
-            </Paper>
-        </Grid>
-        <Grid item xs={12} lg={6}>
-            <Paper sx={{ p: 2, display: 'flex', flexDirection: 'column' }}>
-                <dt className="text-sm font-medium text-gray-500">스토리지 파일</dt>
-                {urls.length > 0 ? (
-                    <dd className="mt-1 text-sm text-gray-900">
-                        <ul
-                            role="list"
-                            className="divide-y divide-gray-200 rounded-md border border-gray-200"
-                        >
-                            {urls.map(url => (
-                                <FileListRow key={url} url={url} />
-                            ))}
-                        </ul>
-                    </dd>
-                ) : null}
-            </Paper>
-        </Grid>
-    </Grid>
-}
-
-function FileListRow({ url }: any) {
-
-    const formatUtil = new FormatUtil()
-    const fileName = formatUtil.extractFileNameFromUrl(url)
 
     return (
-        <li className="flex items-center justify-between py-3 pl-3 pr-4 text-sm">
-            <div className="flex w-0 flex-1 items-center">
-                <span className="ml-2 w-0 flex-1 truncate">{fileName}</span>
-            </div>
-            <div className="ml-4 flex-shrink-0">
-                <a href={url}
-                   className="font-medium text-indigo-600 hover:text-indigo-500">다운로드
-                </a>
-            </div>
-        </li>
+        <Grid container spacing={3}>
+            <Grid item xs={12} lg={6}>
+                <Paper sx={{ p: 2, display: 'flex', flexDirection: 'column', gap: 2 }}>
+                    <Typography>요청 양식</Typography>
+                    <TextField
+                        label="법인폰 번호"
+                        name="phoneNumber"
+                        value={phoneNumber}
+                        onChange={handleChange}
+                        required />
+                    <TextField
+                        label="날짜"
+                        name="date"
+                        value={date}
+                        onChange={handleChange}
+                        required />
+                    <FormControl>
+                        <InputLabel id="type">요청 타입</InputLabel>
+                        <Select
+                            labelId="type"
+                            name="type"
+                            value={type}
+                            label="요청 타입"
+                            onChange={handleChange}
+                        >
+                            <MenuItem value={UPLOAD_LOGS}>[1] 로그</MenuItem>
+                            <MenuItem value={UPLOAD_FILE_LIST}>[2] 파일 리스트</MenuItem>
+                            <MenuItem value={UPLOAD_RECORDS}>[5] 녹취 파일 업로드</MenuItem>
+                        </Select>
+                    </FormControl>
+                    <FormGroup>
+                        <FormControlLabel
+                            control={
+                                <Checkbox
+                                    name="isIncludeRecord"
+                                    value={isIncludeRecord}
+                                    checked={isIncludeRecord}
+                                    onChange={handleChange} />
+                            }
+                            label="녹취 파일 포함" />
+                    </FormGroup>
+                    <Button
+                        type="submit"
+                        onClick={handleSubmit}
+                        variant="contained"
+                    >
+                        FCM 요청
+                    </Button>
+                </Paper>
+                <Button
+                    onClick={() => console.log(values)}
+                    sx={{ mt: 2 }}
+                >
+                    Show req values
+                </Button>
+            </Grid>
+            <Grid item xs={12} lg={6}>
+                <Paper sx={{ p: 2, display: 'flex', flexDirection: 'column', gap: 2 }}>
+                    <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                        <Typography>스토리지 파일</Typography>
+                        <IconButton onClick={getStorageFiles}>
+                            <RefreshIcon />
+                        </IconButton>
+                    </Box>
+                    {storageFileData.length > 0 ? (
+                        <Table>
+                            <TableBody>
+                                {storageFileData.map(storageFile => (
+                                    <TableRow
+                                        key={storageFile.fileName}
+                                        sx={{ '&:last-child td, &:last-child th': { border: 0 } }}
+                                    >
+                                        <TableCell>
+                                            <Typography
+                                                sx={{
+                                                    width: 300,
+                                                    fontSize: 14,
+                                                    whiteSpace: 'nowrap',
+                                                    overflow: 'hidden',
+                                                    textOverflow: 'ellipsis'
+                                                }}
+                                            >
+                                                {decodeURIComponent(storageFile.fileName)}
+                                            </Typography>
+                                        </TableCell>
+                                        <TableCell>
+                                            <Link
+                                                href={storageFile.downloadUrl}
+                                                underline="hover"
+                                            >
+                                                다운로드
+                                            </Link>
+                                        </TableCell>
+                                    </TableRow>
+                                ))}
+                            </TableBody>
+                        </Table>
+                    ) : (
+                        <Typography
+                            variant="caption"
+                            sx={{ color: '#999999' }}
+                        >
+                            스토리지가 비어 있습니다
+                        </Typography>
+                    )}
+                </Paper>
+            </Grid>
+        </Grid>
     )
 }
 
-interface Props {
+export default FcmRequestForm
 
-    /**
-     * 인증 키.
-     */
-    authorizationKey: string,
 
-    /**
-     * 파이어베이스 설정.
-     */
-    firebaseConfig: FirebaseConfig
-
-}
+/**
+ * <TableHead>
+ *     <TableRow>
+ *         <TableCell>File name</TableCell>
+ *         <TableCell>Download</TableCell>
+ *     </TableRow>
+ * </TableHead>
+ */
